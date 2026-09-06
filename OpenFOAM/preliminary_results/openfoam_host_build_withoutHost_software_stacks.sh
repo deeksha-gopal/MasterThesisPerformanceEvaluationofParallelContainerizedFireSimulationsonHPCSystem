@@ -1,4 +1,4 @@
-# This is the jobscript to install Host Openfoam_v2406 without including host modules of OpenMPI and GCC
+# This is the jobscript to install Host Openfoam_v2406
 
 #!/bin/bash
 #SBATCH --job-name=install_openfoam_v2406_host
