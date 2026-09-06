@@ -1,3 +1,5 @@
+# Basic execution of Openfoam-v2406 benchmark Container without any changes made to the tutorial
+
 #!/bin/bash
 #SBATCH --job-name=of_container_4core
 #SBATCH --output=of_container_%j.out
