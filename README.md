@@ -1,4 +1,4 @@
-# Master Thesis Performance Evaluation of Parallel Containerized Fire Simulations on HPC System
+# Master Thesis:- "Performance Evaluation of Parallel Containerized Fire Simulations on HPC System"
 
 The repository contains both the final benchmark scripts used for the performance results reported in the thesis and the preliminary scripts used during benchmark development.
 
