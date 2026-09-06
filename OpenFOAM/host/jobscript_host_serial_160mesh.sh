@@ -31,7 +31,7 @@ export OMP_NUM_THREADS=1
 export OMP_PROC_BIND=close
 unset OMP_PLACES || true
 
-# Keep the same OpenMPI environment even though mpirun is not used.
+# Same OpenMPI environment even though mpirun is not used.
 export OMPI_MCA_pml="$MPI_PML"
 export OMPI_MCA_btl="$MPI_BTL"
 
@@ -286,7 +286,7 @@ if [[ "$RUNTIME" == "container" ]]; then
         export OMPI_MCA_pml='${MPI_PML}'
         export OMPI_MCA_btl='${MPI_BTL}'
     "
-    # Helper for untimed serial setup commands
+    # Helper function for untimed serial setup commands
     run_serial()
     {
         local case_dir="$1"
@@ -536,7 +536,7 @@ path.write_text(text)
 
 PYMESH
 
-# Exactly same simulation controls as parallel benchmark
+# Exactly same simulation controls & parameters as parallel benchmark
 set_dictionary_entry \
     "${BASE_CASE}/system/controlDict" \
     deltaT \
@@ -870,7 +870,7 @@ if (( RUN_RC != 0 )); then
 
 fi
 
-# Detect genuine OpenFOAM errors
+# Detect OpenFOAM errors
 if grep -Eiq \
     -- '--> FOAM FATAL|FOAM parallel run exiting|MPI_ABORT|Segmentation fault|Floating point exception \(core dumped\)|Killed process|Out of memory' \
     "$RUN_LOG" \
@@ -892,7 +892,7 @@ grep -q "^End$" \
     die \
     "OpenFOAM completion marker missing."
 
-# Verify this was NOT a parallel run
+# Verify this was not a parallel run
 if grep -q \
     'Pstream initialized with:' \
     "$RUN_LOG"
@@ -909,7 +909,6 @@ FINAL_TIME="$(
     tail -1
 )"
 
-# fireFoam commonly prints "Time = ..." rather than "runTime = ..."
 [[ -n "$FINAL_TIME" ]] ||
     die \
     "Could not determine final OpenFOAM simulation time."
