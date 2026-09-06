@@ -1,0 +1,178 @@
+Bootstrap: docker
+From: almalinux:9
+
+%labels
+    Author Deeksha_Gopal
+    Application FDS
+    Compiler GCC-12.3.0
+    MPI OpenMPI-4.1.5
+    Communication UCX
+    BuildType Host-EasyBuild-MPI
+
+%setup
+    mkdir -p "${APPTAINER_ROOTFS}/beegfs/Tools"
+    mkdir -p "${APPTAINER_ROOTFS}/beegfs/gopal/new/fds/logs"
+
+%files
+    /beegfs/gopal/new/fds/host_mpi_env.sh /opt/host_mpi_env.sh
+
+%environment
+    if [ -f /opt/host_mpi_env.sh ]; then
+        . /opt/host_mpi_env.sh
+    fi
+
+    export FDS_HOME=/opt/fds
+    export FDS_BIN=/opt/fds/bin/fds
+    export PATH=/opt/fds/bin:${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+    export OMP_NUM_THREADS=1
+
+    unset CPATH
+    unset C_INCLUDE_PATH
+    unset CPLUS_INCLUDE_PATH
+
+%post -c /bin/bash
+    set -e
+    set -o pipefail
+
+    NBUILD="${APPTAINER_BUILD_CPUS:-4}"
+    HOST_LOG_DIR=/beegfs/gopal/new/fds/logs
+    BUILD_LOG="$HOST_LOG_DIR/fds-container-build.log"
+    ERROR_LOG="$HOST_LOG_DIR/fds-container-errors.log"
+
+    mkdir -p "$HOST_LOG_DIR"
+    rm -f "$BUILD_LOG" "$ERROR_LOG"
+
+    dnf -y update
+    dnf -y install dnf-plugins-core
+    dnf config-manager --set-enabled crb
+    dnf -y install epel-release
+    dnf -y install bash binutils ca-certificates cmake diffutils file findutils git \
+        glibc-devel gzip hostname libibverbs libibverbs-devel librdmacm \
+        librdmacm-devel libstdc++-devel make patch perl procps-ng python3 \
+        tar unzip util-linux wget which xz zlib-devel
+    ldconfig
+    dnf clean all
+    rm -rf /var/cache/dnf
+
+    test -f /opt/host_mpi_env.sh || { echo "ERROR: host MPI environment missing"; exit 10; }
+    bash -n /opt/host_mpi_env.sh || { echo "ERROR: invalid host MPI environment"; exit 11; }
+    . /opt/host_mpi_env.sh
+
+    unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH
+
+    for cmd in gcc g++ gfortran mpicc mpicxx mpifort mpirun ompi_info; do
+        command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: $cmd unavailable"; exit 12; }
+        echo "$cmd: $(command -v "$cmd")"
+    done
+
+    case "$(gcc -dumpfullversion)" in
+        12.3.0*) echo "SUCCESS: GCC 12.3.0 active" ;;
+        *) echo "ERROR: GCC 12.3.0 not active"; exit 13 ;;
+    esac
+
+    case "$(mpirun --version | sed -n '1p')" in
+        *4.1.5*) echo "SUCCESS: OpenMPI 4.1.5 active" ;;
+        *) echo "ERROR: OpenMPI 4.1.5 not active"; exit 14 ;;
+    esac
+
+    ompi_info --param pml ucx --level 1 >/tmp/openmpi_ucx_check.txt 2>&1 || true
+    cat /tmp/openmpi_ucx_check.txt
+    grep -q "MCA pml: ucx" /tmp/openmpi_ucx_check.txt || {
+        echo "ERROR: OpenMPI UCX PML unavailable"; exit 15;
+    }
+
+    rm -rf /opt/fds
+    git clone https://github.com/firemodels/fds.git /opt/fds
+    cd /opt/fds
+    git checkout master
+    git rev-parse HEAD >/opt/fds/FDS_GIT_COMMIT.txt
+
+    test -x /opt/fds/Build/ompi_gnu_linux/make_fds.sh || {
+        echo "ERROR: FDS GNU/OpenMPI build script missing"; exit 20;
+    }
+
+    cd /opt/fds/Build/ompi_gnu_linux
+    export CC="$(command -v mpicc)"
+    export CXX="$(command -v mpicxx)"
+    export FC="$(command -v mpifort)"
+    export F77="$(command -v mpifort)"
+    export F90="$(command -v mpifort)"
+    export MAKEFLAGS="-j${NBUILD}"
+    export OMP_NUM_THREADS=1
+
+    set +e
+    set +o pipefail
+    ./make_fds.sh 2>&1 | tee "$BUILD_LOG"
+    BUILD_RC="${PIPESTATUS[0]}"
+    set -o pipefail
+    set -e
+
+    if [ "$BUILD_RC" -ne 0 ]; then
+        grep -nEi 'fatal error:|error:|undefined reference|cannot find -l|No rule to make target|Killed|No space left|permission denied|out of memory|make(\[[0-9]+\])?: \*\*\*' \
+            "$BUILD_LOG" | head -n 250 >"$ERROR_LOG" || true
+        cat "$ERROR_LOG"
+        tail -n 500 "$BUILD_LOG" || true
+        exit 30
+    fi
+
+    FDS_BUILT=""
+    for candidate in \
+        /opt/fds/Build/ompi_gnu_linux/fds_ompi_gnu_linux \
+        /opt/fds/Build/ompi_gnu_linux/fds \
+        /opt/fds/Build/ompi_gnu_linux/fds_*; do
+        if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+            FDS_BUILT="$candidate"
+            break
+        fi
+    done
+
+    [ -n "$FDS_BUILT" ] || { echo "ERROR: compiled FDS executable not found"; exit 31; }
+
+    mkdir -p /opt/fds/bin
+    cp -a "$FDS_BUILT" /opt/fds/bin/fds
+    chmod 755 /opt/fds/bin/fds
+
+    file /opt/fds/bin/fds
+    ldd /opt/fds/bin/fds
+
+    if ldd /opt/fds/bin/fds | grep -q "not found"; then
+        echo "ERROR: unresolved FDS libraries"
+        exit 41
+    fi
+
+    MPI_LDD_LINE="$(ldd /opt/fds/bin/fds | grep -m1 -E 'libmpi')"
+    [ -n "$MPI_LDD_LINE" ] || { echo "ERROR: MPI dependency not found"; exit 42; }
+    echo "$MPI_LDD_LINE"
+
+    case "$MPI_LDD_LINE" in
+        *"/beegfs/Tools/"*"OpenMPI/4.1.5-GCC-12.3.0/"*)
+            echo "SUCCESS: FDS uses host OpenMPI 4.1.5" ;;
+        *) echo "ERROR: unexpected MPI dependency"; exit 43 ;;
+    esac
+
+    /opt/fds/bin/fds -v || true
+
+%runscript
+    #!/bin/bash
+    set -e
+
+    test -f /opt/host_mpi_env.sh || {
+        echo "ERROR: /opt/host_mpi_env.sh missing"
+        exit 1
+    }
+
+    . /opt/host_mpi_env.sh
+    unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH
+
+    export FDS_HOME=/opt/fds
+    export FDS_BIN=/opt/fds/bin/fds
+    export PATH=/opt/fds/bin:${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+
+    test -x "$FDS_BIN" || { echo "ERROR: $FDS_BIN unavailable"; exit 2; }
+
+    if [ "$#" -eq 0 ]; then
+        exec /bin/bash
+    fi
+
+    exec "$FDS_BIN" "$@"
