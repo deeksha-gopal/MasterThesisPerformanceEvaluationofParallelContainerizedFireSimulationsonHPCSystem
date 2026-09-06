@@ -1,4 +1,5 @@
-
+# This code is the initial preliminary results of running Openfoam-V2406 Container without same Host OpenMPI and GCC.
+# Where Host and Container had different modules unlike the current final results. 
 
 #!/bin/bash
 #SBATCH --job-name=openfoam_inside_container_fixedIter
