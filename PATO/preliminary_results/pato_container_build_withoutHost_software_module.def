@@ -1,0 +1,96 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%environment
+    export FOAM_INST_DIR=/opt/OpenFOAM
+    export WM_PROJECT_VERSION=7
+    export WM_PROJECT_DIR=$FOAM_INST_DIR/OpenFOAM-7
+    export WM_THIRD_PARTY_DIR=$FOAM_INST_DIR/ThirdParty-7
+    export PATO_DIR=/opt/pato-3.1
+
+    export PATH=$WM_PROJECT_DIR/platforms/linux64GccDPInt32Opt/bin:$PATH
+    export LD_LIBRARY_PATH=$WM_PROJECT_DIR/platforms/linux64GccDPInt32Opt/lib:$LD_LIBRARY_PATH
+    export PATH=$PATO_DIR/install/bin:$PATH
+    export LD_LIBRARY_PATH=$PATO_DIR/install/lib:$LD_LIBRARY_PATH
+
+%post
+    set -ex
+    export DEBIAN_FRONTEND=noninteractive
+
+    echo "Installing prerequisites..."
+    apt-get update
+    apt-get install -y \
+        build-essential \
+        cmake \
+        flex \
+        bison \
+        zlib1g-dev \
+        qtbase5-dev \
+        libqt5x11extras5-dev \
+        libxt-dev \
+        libscotch-dev \
+        libopenmpi-dev \
+        openmpi-bin \
+        git \
+        wget \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release \
+        vim \
+        python3 \
+        python3-pip \
+        tzdata
+
+    echo "Setting timezone to Europe/London..."
+    ln -fs /usr/share/zoneinfo/Europe/London /etc/localtime
+    dpkg-reconfigure --frontend noninteractive tzdata
+
+    echo "Creating OpenFOAM directories..."
+    mkdir -p /opt/OpenFOAM
+    cd /opt/OpenFOAM
+
+    echo "Cloning OpenFOAM-7 and ThirdParty-7..."
+    git clone --branch version-7 --depth 1 https://github.com/OpenFOAM/OpenFOAM-7.git
+    git clone --branch version-7 --depth 1 https://github.com/OpenFOAM/ThirdParty-7.git
+
+    echo "Building OpenFOAM..."
+    /bin/bash -lc "
+        export FOAM_INST_DIR=/opt/OpenFOAM
+        export WM_PROJECT_DIR=/opt/OpenFOAM/OpenFOAM-7
+        export WM_THIRD_PARTY_DIR=/opt/OpenFOAM/ThirdParty-7
+        source /opt/OpenFOAM/OpenFOAM-7/etc/bashrc
+        cd /opt/OpenFOAM/OpenFOAM-7
+        ./Allwmake -j\$(nproc)
+    "
+
+    echo "Cloning PATO 3.1..."
+    cd /opt
+    git clone --branch 3.1 --depth 1 https://github.com/nasa/pato.git pato-3.1
+
+    echo "Building PATO..."
+    /bin/bash -lc "
+        export FOAM_INST_DIR=/opt/OpenFOAM
+        export WM_PROJECT_DIR=/opt/OpenFOAM/OpenFOAM-7
+        export WM_THIRD_PARTY_DIR=/opt/OpenFOAM/ThirdParty-7
+        export PATO_DIR=/opt/pato-3.1
+        source /opt/OpenFOAM/OpenFOAM-7/etc/bashrc
+        source /opt/pato-3.1/bashrc
+        cd /opt/pato-3.1
+        ./AllwcleanAllclean || true
+        ./Allwmake -j\$(nproc)
+    "
+
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%labels
+    Author Deeksha Gopal
+    Version openfoam7-pato3.1
+
+%runscript
+    echo "OpenFOAM 7 and PATO 3.1 container"
+    echo "Run:"
+    echo "  source /opt/OpenFOAM/OpenFOAM-7/etc/bashrc"
+    echo "  source /opt/pato-3.1/bashrc"
+    exec /bin/bash
