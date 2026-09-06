@@ -191,7 +191,7 @@ if [[ "$RUNTIME" == "container" ]]; then
     HOST_MPI_ENV="/opt/host_mpi_env.sh"
 
     RESULT_ROOT="${PROJECT_ROOT}/results"
-    ROOT="${RESULT_ROOT}/smallPoolFire3D_160cube_container_explicit_mpi_2ndrun_${NODES}node_${JOB_ID}"
+    ROOT="${RESULT_ROOT}/smallPoolFire3D_160cube_container_explicit_mpi_run_${NODES}node_${JOB_ID}"
 
     require_file "$IMAGE"
     require_command apptainer
