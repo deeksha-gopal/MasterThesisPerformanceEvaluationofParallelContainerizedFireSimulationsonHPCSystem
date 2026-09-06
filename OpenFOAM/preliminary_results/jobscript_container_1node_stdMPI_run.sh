@@ -10,6 +10,11 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --exclusive
 
+# The same script supports 1, 2, and 4 nodes.
+#   1 node:  sbatch --nodes=1 --ntasks=50 --ntasks-per-node=50 SCRIPT
+#   2 nodes: sbatch --nodes=2 --ntasks=100 --ntasks-per-node=50 SCRIPT
+#   4 nodes: sbatch --nodes=4 --ntasks=200 --ntasks-per-node=50 SCRIPT
+
 set -e
 set -o pipefail
 
