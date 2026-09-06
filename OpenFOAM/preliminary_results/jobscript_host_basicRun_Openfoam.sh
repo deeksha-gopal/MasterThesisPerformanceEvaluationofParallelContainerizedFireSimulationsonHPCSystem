@@ -1,3 +1,5 @@
+# Basic execution of Openfoam-v2406 benchmark Host without any changes made to the tutorial
+
 #!/bin/bash
 #SBATCH --job-name=of_host_4core
 #SBATCH --output=of_host_%j.out
