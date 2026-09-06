@@ -1,0 +1,517 @@
+Bootstrap: docker
+From: almalinux:9
+  
+%labels
+    Author Deeksha_Gopal
+    Application OpenFOAM-v2406
+    Compiler GCC-12.3.0
+    MPI OpenMPI-4.1.5
+    Communication UCX
+    FFTW System-FFTW
+    BuildType Host-EasyBuild-MPI
+
+%setup
+    mkdir -p "${APPTAINER_ROOTFS}/beegfs/Tools"
+    mkdir -p "${APPTAINER_ROOTFS}/beegfs/gopal/new/openfoam/logs"
+
+%files
+    /beegfs/gopal/new/openfoam/host_mpi_env.sh /opt/host_mpi_env.sh
+
+%environment
+    export FOAM_INST_DIR=/opt/OpenFOAM
+    export WM_PROJECT_INST_DIR=/opt/OpenFOAM
+    export WM_PROJECT_DIR=/opt/OpenFOAM/OpenFOAM-v2406
+    export WM_THIRD_PARTY_DIR=/opt/OpenFOAM/ThirdParty-v2406
+    export WM_COMPILER_TYPE=system
+    export WM_COMPILER=Gcc
+    export WM_MPLIB=SYSTEMOPENMPI
+    export WM_PRECISION_OPTION=DP
+    export WM_LABEL_SIZE=32
+    export WM_COMPILE_OPTION=Opt
+    export FFTW_ARCH_PATH=/usr
+    export SCOTCH_ARCH_PATH=/usr
+
+    if [ -f /opt/host_mpi_env.sh ]; then
+        . /opt/host_mpi_env.sh
+    fi
+
+    unset CPATH
+    unset C_INCLUDE_PATH
+    unset CPLUS_INCLUDE_PATH
+
+%post -c /bin/bash
+    set -e
+    set -o pipefail
+
+    export FOAM_INST_DIR=/opt/OpenFOAM
+    export WM_PROJECT_INST_DIR=/opt/OpenFOAM
+    export WM_PROJECT_DIR=/opt/OpenFOAM/OpenFOAM-v2406
+    export WM_THIRD_PARTY_DIR=/opt/OpenFOAM/ThirdParty-v2406
+    export WM_COMPILER_TYPE=system
+    export WM_COMPILER=Gcc
+    export WM_MPLIB=SYSTEMOPENMPI
+    export WM_PRECISION_OPTION=DP
+    export WM_LABEL_SIZE=32
+    export WM_COMPILE_OPTION=Opt
+    export FFTW_ARCH_PATH=/usr
+    export SCOTCH_ARCH_PATH=/usr
+    export OMP_NUM_THREADS=1
+
+    NBUILD="${APPTAINER_BUILD_CPUS:-4}"
+    export WM_NCOMPPROCS="$NBUILD"
+    export MAKEFLAGS="-j${NBUILD}"
+
+    HOST_LOG_DIR=/beegfs/gopal/new/openfoam/logs
+    BUILD_LOG="$HOST_LOG_DIR/openfoam-v2406-build.log"
+    ERROR_LOG="$HOST_LOG_DIR/openfoam-v2406-errors.log"
+
+    mkdir -p "$HOST_LOG_DIR"
+    rm -f "$BUILD_LOG" "$ERROR_LOG"
+
+    echo "============================================================"
+    echo "Installing OpenFOAM-v2406 dependencies"
+    echo "============================================================"
+
+    dnf -y update
+    dnf -y install dnf-plugins-core
+    dnf config-manager --set-enabled crb
+    dnf -y install epel-release
+
+    dnf -y install \
+        bash bc binutils bison boost-devel ca-certificates cmake diffutils \
+        fftw-devel file findutils flex gcc gcc-c++ gcc-gfortran git \
+        glibc-devel gzip hostname libibverbs libibverbs-devel librdmacm \
+        librdmacm-devel libstdc++-devel libX11-devel libXext-devel \
+        libXft-devel libXrender-devel libXt-devel m4 make mesa-libGL-devel \
+        mesa-libGLU-devel ncurses-devel openssl-devel patch perl procps-ng \
+        python3 python3-pip readline-devel scotch scotch-devel tar unzip \
+        util-linux vim-minimal wget which xz zip zlib-devel
+
+    ldconfig
+
+    test -f /usr/include/fftw3.h || {
+        echo "ERROR: FFTW header is missing."
+        exit 8
+    }
+
+    ldconfig -p | grep -q 'libfftw3[.]so' || {
+        echo "ERROR: FFTW library is missing."
+        exit 9
+    }
+
+    dnf clean all
+    rm -rf /var/cache/dnf
+
+    echo "============================================================"
+    echo "Loading EasyBuild GCC and OpenMPI"
+    echo "============================================================"
+
+    test -f /opt/host_mpi_env.sh || {
+        echo "ERROR: /opt/host_mpi_env.sh is missing."
+        exit 10
+    }
+
+    bash -n /opt/host_mpi_env.sh || {
+        echo "ERROR: /opt/host_mpi_env.sh contains invalid syntax."
+        exit 11
+    }
+
+    . /opt/host_mpi_env.sh
+
+    unset CPATH
+    unset C_INCLUDE_PATH
+    unset CPLUS_INCLUDE_PATH
+
+    remove_fftw_entries()
+    {
+        local value="${1:-}"
+        [ -n "$value" ] || return 0
+
+        printf '%s\n' "$value" |
+            tr ':' '\n' |
+            grep -vi '/FFTW/' |
+            awk 'NF && !seen[$0]++' |
+            paste -sd ':' -
+    }
+
+    export PATH="$(remove_fftw_entries "${PATH:-}")"
+    export LD_LIBRARY_PATH="$(remove_fftw_entries "${LD_LIBRARY_PATH:-}")"
+    export LIBRARY_PATH="$(remove_fftw_entries "${LIBRARY_PATH:-}")"
+    export PKG_CONFIG_PATH="$(remove_fftw_entries "${PKG_CONFIG_PATH:-}")"
+    export CMAKE_PREFIX_PATH="$(remove_fftw_entries "${CMAKE_PREFIX_PATH:-}")"
+
+    export LD_LIBRARY_PATH="/usr/lib64:${LD_LIBRARY_PATH:-}"
+    export LIBRARY_PATH="/usr/lib64:${LIBRARY_PATH:-}"
+    export FFTW_ARCH_PATH=/usr
+    export SCOTCH_ARCH_PATH=/usr
+
+    for command_name in gcc g++ gfortran mpicc mpicxx mpifort mpirun ompi_info
+    do
+        command -v "$command_name" >/dev/null 2>&1 || {
+            echo "ERROR: $command_name is unavailable."
+            exit 12
+        }
+        echo "$command_name: $(command -v "$command_name")"
+    done
+
+    case "$(gcc -dumpfullversion)" in
+        12.3.0*) echo "SUCCESS: GCC 12.3.0 is active." ;;
+        *)
+            echo "ERROR: GCC 12.3.0 is not active."
+            gcc --version | head -n 1
+            exit 13
+            ;;
+    esac
+
+    case "$(mpirun --version | sed -n '1p')" in
+        *4.1.5*) echo "SUCCESS: OpenMPI 4.1.5 is active." ;;
+        *)
+            echo "ERROR: OpenMPI 4.1.5 is not active."
+            mpirun --version
+            exit 14
+            ;;
+    esac
+
+    ompi_info --param pml ucx --level 1 >/tmp/openmpi_ucx_check.txt 2>&1 || true
+    cat /tmp/openmpi_ucx_check.txt
+
+    grep -q "MCA pml: ucx" /tmp/openmpi_ucx_check.txt || {
+        echo "ERROR: OpenMPI UCX PML is unavailable."
+        exit 15
+    }
+
+    printf '#include <stdlib.h>\nint main(){return 0;}\n' |
+        g++ -x c++ -c -o /tmp/stdlib-check.o - || {
+            echo "ERROR: GCC cannot find stdlib.h."
+            echo "CPATH=${CPATH-unset}"
+            echo "C_INCLUDE_PATH=${C_INCLUDE_PATH-unset}"
+            echo "CPLUS_INCLUDE_PATH=${CPLUS_INCLUDE_PATH-unset}"
+            exit 16
+        }
+    rm -f /tmp/stdlib-check.o
+
+    echo "============================================================"
+    echo "Downloading OpenFOAM-v2406 and ThirdParty-v2406"
+    echo "============================================================"
+
+    mkdir -p /opt/OpenFOAM
+    cd /opt/OpenFOAM
+
+    rm -rf OpenFOAM-v2406 ThirdParty-v2406 \
+        OpenFOAM-v2406.tgz ThirdParty-v2406.tgz
+
+    wget --tries=5 --timeout=60 \
+        https://dl.openfoam.com/source/v2406/OpenFOAM-v2406.tgz \
+        -O OpenFOAM-v2406.tgz
+
+    wget --tries=5 --timeout=60 \
+        https://dl.openfoam.com/source/v2406/ThirdParty-v2406.tgz \
+        -O ThirdParty-v2406.tgz
+
+    tar -xzf OpenFOAM-v2406.tgz
+    tar -xzf ThirdParty-v2406.tgz
+    rm -f OpenFOAM-v2406.tgz ThirdParty-v2406.tgz
+
+    test -f "$WM_PROJECT_DIR/Allwmake" || {
+        echo "ERROR: OpenFOAM extraction failed."
+        exit 20
+    }
+
+    test -d "$WM_THIRD_PARTY_DIR" || {
+        echo "ERROR: ThirdParty extraction failed."
+        exit 21
+    }
+
+    echo "============================================================"
+    echo "Configuring system FFTW"
+    echo "============================================================"
+
+    FFTW_CONFIG="$WM_PROJECT_DIR/etc/config.sh/FFTW"
+
+    test -f "$FFTW_CONFIG" || {
+        echo "ERROR: FFTW configuration is missing: $FFTW_CONFIG"
+        exit 22
+    }
+
+    cp -a "$FFTW_CONFIG" "${FFTW_CONFIG}.original"
+
+    python3 - "$FFTW_CONFIG" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+text, n1 = re.subn(
+    r'(?m)^[ \t]*(?:export[ \t]+)?fftw_version=.*$',
+    'fftw_version=fftw-system',
+    text,
+    count=1,
+)
+text, n2 = re.subn(
+    r'(?m)^[ \t]*export[ \t]+FFTW_ARCH_PATH=.*$',
+    'export FFTW_ARCH_PATH=/usr',
+    text,
+    count=1,
+)
+
+if n1 != 1:
+    raise SystemExit('Could not update fftw_version')
+if n2 != 1:
+    raise SystemExit('Could not update FFTW_ARCH_PATH')
+
+path.write_text(text)
+PY
+
+    grep -nE 'fftw_version|FFTW_ARCH_PATH' "$FFTW_CONFIG"
+
+    echo "============================================================"
+    echo "Preparing OpenFOAM-v2406 environment"
+    echo "============================================================"
+
+    cd "$WM_PROJECT_DIR"
+
+    set +e
+    set +u
+    set +o pipefail
+    . "$WM_PROJECT_DIR/etc/bashrc"
+    BASHRC_RC=$?
+    set -e
+    set -o pipefail
+
+    echo "OpenFOAM bashrc return code: $BASHRC_RC"
+
+    export FOAM_INST_DIR=/opt/OpenFOAM
+    export WM_PROJECT_INST_DIR=/opt/OpenFOAM
+    export WM_PROJECT_DIR=/opt/OpenFOAM/OpenFOAM-v2406
+    export WM_THIRD_PARTY_DIR=/opt/OpenFOAM/ThirdParty-v2406
+    export WM_COMPILER_TYPE=system
+    export WM_COMPILER=Gcc
+    export WM_MPLIB=SYSTEMOPENMPI
+    export WM_PRECISION_OPTION=DP
+    export WM_LABEL_SIZE=32
+    export WM_COMPILE_OPTION=Opt
+    export WM_NCOMPPROCS="$NBUILD"
+    export FFTW_ARCH_PATH=/usr
+    export SCOTCH_ARCH_PATH=/usr
+
+    unset CPATH
+    unset C_INCLUDE_PATH
+    unset CPLUS_INCLUDE_PATH
+
+    test -n "${WM_OPTIONS:-}" || {
+        echo "ERROR: WM_OPTIONS was not initialized."
+        exit 23
+    }
+
+    command -v wmake >/dev/null 2>&1 || {
+        echo "ERROR: wmake is unavailable."
+        exit 24
+    }
+
+    echo "WM_OPTIONS=$WM_OPTIONS"
+    echo "FOAM_MPI=${FOAM_MPI:-not-set}"
+    echo "FOAM_APPBIN=$FOAM_APPBIN"
+    echo "FOAM_LIBBIN=$FOAM_LIBBIN"
+
+    echo "============================================================"
+    echo "Building OpenFOAM-v2406"
+    echo "============================================================"
+
+    df -h /opt /tmp "$HOST_LOG_DIR" || true
+    free -h || true
+
+    set +e
+    set +o pipefail
+    ./Allwmake -j "$NBUILD" 2>&1 | tee "$BUILD_LOG"
+    OPENFOAM_BUILD_RC="${PIPESTATUS[0]}"
+    set -o pipefail
+    set -e
+
+    echo "Allwmake return code: $OPENFOAM_BUILD_RC"
+
+    if [ "$OPENFOAM_BUILD_RC" -ne 0 ]; then
+        {
+            echo "OpenFOAM-v2406 build failed"
+            echo "Allwmake return code: $OPENFOAM_BUILD_RC"
+            echo
+            grep -nEi \
+                'fatal error:|error:|undefined reference|cannot find -l|No rule to make target|Killed|No space left|permission denied|out of memory|make(\[[0-9]+\])?: \*\*\*' \
+                "$BUILD_LOG" | head -n 250 || true
+        } >"$ERROR_LOG"
+
+        cat "$ERROR_LOG"
+        tail -n 500 "$BUILD_LOG" || true
+        exit 40
+    fi
+
+    echo "============================================================"
+    echo "Verifying OpenFOAM-v2406"
+    echo "============================================================"
+
+    set +e
+    set +u
+    set +o pipefail
+    . "$WM_PROJECT_DIR/etc/bashrc"
+    RELOAD_RC=$?
+    set -e
+    set -o pipefail
+
+    echo "OpenFOAM reload return code: $RELOAD_RC"
+
+    export WM_COMPILER_TYPE=system
+    export WM_COMPILER=Gcc
+    export WM_MPLIB=SYSTEMOPENMPI
+    export WM_PRECISION_OPTION=DP
+    export WM_LABEL_SIZE=32
+    export WM_COMPILE_OPTION=Opt
+    export FFTW_ARCH_PATH=/usr
+
+    unset CPATH
+    unset C_INCLUDE_PATH
+    unset CPLUS_INCLUDE_PATH
+
+    for command_name in wmake blockMesh decomposePar reconstructPar fireFoam
+    do
+        command -v "$command_name" >/dev/null 2>&1 || {
+            echo "ERROR: $command_name was not created."
+            exit 41
+        }
+        echo "$command_name: $(command -v "$command_name")"
+    done
+
+    FIREFOAM_BIN="$(command -v fireFoam)"
+
+    if ldd "$FIREFOAM_BIN" | grep -q "not found"; then
+        echo "ERROR: fireFoam has unresolved libraries."
+        ldd "$FIREFOAM_BIN" | grep "not found" || true
+        exit 42
+    fi
+
+    RANDOM_PROCESSES_LIB="$FOAM_LIBBIN/librandomProcesses.so"
+
+    test -f "$RANDOM_PROCESSES_LIB" || {
+        echo "ERROR: librandomProcesses.so was not built."
+        exit 43
+    }
+
+    if ldd "$RANDOM_PROCESSES_LIB" | grep -q "not found"; then
+        echo "ERROR: librandomProcesses.so has unresolved libraries."
+        exit 44
+    fi
+
+    echo "FFTW linkage:"
+    ldd "$RANDOM_PROCESSES_LIB" | grep -i fftw || {
+        echo "ERROR: FFTW was not resolved."
+        exit 45
+    }
+
+    PSTREAM_LIBRARY="$FOAM_LIBBIN/${FOAM_MPI:-sys-openmpi}/libPstream.so"
+
+    if [ ! -f "$PSTREAM_LIBRARY" ] &&
+       [ -f "$FOAM_LIBBIN/sys-openmpi/libPstream.so" ]; then
+        PSTREAM_LIBRARY="$FOAM_LIBBIN/sys-openmpi/libPstream.so"
+    fi
+
+    test -f "$PSTREAM_LIBRARY" || {
+        echo "ERROR: MPI Pstream was not found."
+        find "$FOAM_LIBBIN" -name 'libPstream.so*' -print 2>/dev/null || true
+        exit 46
+    }
+
+    echo "Pstream library: $PSTREAM_LIBRARY"
+    ldd "$PSTREAM_LIBRARY"
+
+    if ldd "$PSTREAM_LIBRARY" | grep -q "not found"; then
+        echo "ERROR: Pstream has unresolved libraries."
+        exit 47
+    fi
+
+    MPI_LDD_LINE="$(
+        ldd "$PSTREAM_LIBRARY" |
+        grep -m1 -E '^[[:space:]]*libmpi[.]so([.][0-9]+)*[[:space:]]*=>'
+    )"
+
+    test -n "$MPI_LDD_LINE" || {
+        echo "ERROR: libmpi was not found in Pstream dependencies."
+        exit 48
+    }
+
+    echo "Resolved MPI dependency:"
+    echo "$MPI_LDD_LINE"
+
+    case "$MPI_LDD_LINE" in
+        *"/beegfs/Tools/"*"OpenMPI/4.1.5-GCC-12.3.0/"*)
+            echo "SUCCESS: OpenFOAM-v2406 uses host OpenMPI 4.1.5."
+            ;;
+        *)
+            echo "ERROR: Unexpected MPI installation."
+            exit 49
+            ;;
+    esac
+
+    echo "============================================================"
+    echo "OpenFOAM-v2406 built successfully"
+    echo "============================================================"
+
+%runscript
+    #!/bin/bash
+    set -e
+
+    test -f /opt/host_mpi_env.sh || {
+        echo "ERROR: /opt/host_mpi_env.sh is unavailable."
+        exit 1
+    }
+
+    . /opt/host_mpi_env.sh
+
+    unset CPATH
+    unset C_INCLUDE_PATH
+    unset CPLUS_INCLUDE_PATH
+
+    export FOAM_INST_DIR=/opt/OpenFOAM
+    export WM_PROJECT_INST_DIR=/opt/OpenFOAM
+    export WM_PROJECT_DIR=/opt/OpenFOAM/OpenFOAM-v2406
+    export WM_THIRD_PARTY_DIR=/opt/OpenFOAM/ThirdParty-v2406
+    export WM_COMPILER_TYPE=system
+    export WM_COMPILER=Gcc
+    export WM_MPLIB=SYSTEMOPENMPI
+    export WM_PRECISION_OPTION=DP
+    export WM_LABEL_SIZE=32
+    export WM_COMPILE_OPTION=Opt
+    export FFTW_ARCH_PATH=/usr
+    export SCOTCH_ARCH_PATH=/usr
+    export OMP_NUM_THREADS=1
+
+    set +e
+    set +u
+    set +o pipefail
+    . "$WM_PROJECT_DIR/etc/bashrc"
+    set -e
+    set -o pipefail
+
+    unset CPATH
+    unset C_INCLUDE_PATH
+    unset CPLUS_INCLUDE_PATH
+
+    test -n "${WM_OPTIONS:-}" || {
+        echo "ERROR: OpenFOAM environment was not initialized."
+        exit 2
+    }
+
+    command -v blockMesh >/dev/null 2>&1 || {
+        echo "ERROR: blockMesh is unavailable."
+        exit 3
+    }
+
+    command -v fireFoam >/dev/null 2>&1 || {
+        echo "ERROR: fireFoam is unavailable."
+        exit 4
+    }
+
+    if [ "$#" -eq 0 ]; then
+        exec /bin/bash
+    fi
+
+    exec "$@"
