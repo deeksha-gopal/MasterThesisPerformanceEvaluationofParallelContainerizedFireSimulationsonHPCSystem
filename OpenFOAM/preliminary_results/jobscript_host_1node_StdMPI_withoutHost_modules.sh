@@ -1,5 +1,5 @@
-# This code is the initial preliminary results of running Openfoam-V2406 Host without same OpenMPI and GCC modules as Host/HPC cluster. 
-# Where Host and Container had different modules unlike the final results. 
+# This code is the initial preliminary results of running Openfoam-V2406 Host
+# Where Host and Container had different modules unlike the current final results. 
 
 #!/bin/bash
 #SBATCH --job-name=openfoam_host_fixedIter
